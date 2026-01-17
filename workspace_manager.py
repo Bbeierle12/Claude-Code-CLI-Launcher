@@ -38,6 +38,77 @@ BUILTIN_TOOLS = [
     "LS", "Task", "WebFetch", "WebSearch", "TodoRead", "TodoWrite"
 ]
 
+# Built-in workspace templates
+BUILTIN_TEMPLATES = {
+    "python-project": {
+        "name": "Python Project",
+        "description": "Python development with best practices",
+        "icon": "python",
+        "builtin": True,
+        "config": {
+            "model": "sonnet",
+            "allowed_tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+            "append_system_prompt": "This is a Python project. Follow PEP 8 style guidelines and use type hints where appropriate.",
+            "init_claude_md": True,
+            "claude_md_content": "# Python Project\n\n## Setup\n- Use virtual environment (venv or conda)\n- Follow PEP 8 style guide\n- Use type hints for function signatures"
+        }
+    },
+    "nodejs-project": {
+        "name": "Node.js Project",
+        "description": "Node.js/npm development setup",
+        "icon": "nodejs",
+        "builtin": True,
+        "config": {
+            "model": "sonnet",
+            "allowed_tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+            "append_system_prompt": "This is a Node.js project using npm. Follow modern ES6+ conventions."
+        }
+    },
+    "react-app": {
+        "name": "React Application",
+        "description": "React frontend development",
+        "icon": "react",
+        "builtin": True,
+        "config": {
+            "model": "sonnet",
+            "allowed_tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "WebFetch"],
+            "append_system_prompt": "This is a React application. Use functional components and hooks. Follow React best practices."
+        }
+    },
+    "rust-project": {
+        "name": "Rust Project",
+        "description": "Rust development with Cargo",
+        "icon": "rust",
+        "builtin": True,
+        "config": {
+            "model": "sonnet",
+            "allowed_tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+            "append_system_prompt": "This is a Rust project using Cargo. Follow Rust idioms and ensure memory safety."
+        }
+    },
+    "general": {
+        "name": "General Purpose",
+        "description": "Basic workspace with common tools",
+        "icon": "folder",
+        "builtin": True,
+        "config": {
+            "allowed_tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
+        }
+    }
+}
+
+# Default group colors
+GROUP_COLORS = [
+    "#3fb950",  # Green
+    "#58a6ff",  # Blue
+    "#d29922",  # Orange
+    "#a371f7",  # Purple
+    "#f85149",  # Red
+    "#79c0ff",  # Light Blue
+    "#d2a8ff",  # Light Purple
+    "#7ee787",  # Light Green
+]
+
 # Default workspace template
 DEFAULT_WORKSPACE = {
     "name": "",
@@ -64,8 +135,14 @@ DEFAULT_WORKSPACE = {
     "claude_md_content": "",
     "created": "",
     "last_used": "",
-    "use_count": 0
+    "use_count": 0,
+    # New v2 fields
+    "group": "",
+    "template_source": ""
 }
+
+# Current data schema version
+DATA_VERSION = 2
 
 app = Flask(__name__)
 
@@ -77,22 +154,173 @@ def ensure_config_dir():
     """Create config directory if it doesn't exist."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_workspaces() -> dict:
-    """Load workspaces from JSON file."""
+def get_default_data() -> dict:
+    """Get default v2 data structure."""
+    return {
+        "version": DATA_VERSION,
+        "workspaces": {},
+        "groups": {},
+        "templates": {},
+        "history": [],
+        "settings": {
+            "history_limit": 20
+        }
+    }
+
+def migrate_v1_to_v2(old_data: dict) -> dict:
+    """Migrate v1 (flat workspace dict) to v2 structure."""
+    new_data = get_default_data()
+    # Old format was just a flat dict of workspaces
+    new_data["workspaces"] = old_data
+    # Add default group and template_source fields to existing workspaces
+    for name, ws in new_data["workspaces"].items():
+        if "group" not in ws:
+            ws["group"] = ""
+        if "template_source" not in ws:
+            ws["template_source"] = ""
+    return new_data
+
+def load_data() -> dict:
+    """Load full data structure from JSON file with auto-migration."""
     ensure_config_dir()
     if WORKSPACES_FILE.exists():
         try:
             with open(WORKSPACES_FILE, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+
+            # Check if this is v1 format (no version field = flat workspace dict)
+            if "version" not in data:
+                data = migrate_v1_to_v2(data)
+                save_data(data)
+
+            # Ensure all required keys exist
+            default = get_default_data()
+            for key in default:
+                if key not in data:
+                    data[key] = default[key]
+
+            return data
         except (json.JSONDecodeError, IOError):
-            return {}
-    return {}
+            return get_default_data()
+    return get_default_data()
+
+def save_data(data: dict):
+    """Save full data structure to JSON file."""
+    ensure_config_dir()
+    data["version"] = DATA_VERSION
+    with open(WORKSPACES_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def load_workspaces() -> dict:
+    """Load workspaces from JSON file (backward compatible)."""
+    data = load_data()
+    return data.get("workspaces", {})
 
 def save_workspaces(workspaces: dict):
-    """Save workspaces to JSON file."""
-    ensure_config_dir()
-    with open(WORKSPACES_FILE, 'w') as f:
-        json.dump(workspaces, f, indent=2)
+    """Save workspaces to JSON file (backward compatible)."""
+    data = load_data()
+    data["workspaces"] = workspaces
+    save_data(data)
+
+# ============================================================================
+# Groups Functions
+# ============================================================================
+
+def load_groups() -> dict:
+    """Load groups from data."""
+    data = load_data()
+    return data.get("groups", {})
+
+def save_groups(groups: dict):
+    """Save groups to data."""
+    data = load_data()
+    data["groups"] = groups
+    save_data(data)
+
+def get_next_group_color() -> str:
+    """Get the next available group color."""
+    groups = load_groups()
+    used_colors = {g.get("color") for g in groups.values()}
+    for color in GROUP_COLORS:
+        if color not in used_colors:
+            return color
+    # If all colors used, return the first one
+    return GROUP_COLORS[0]
+
+# ============================================================================
+# Templates Functions
+# ============================================================================
+
+def load_templates() -> dict:
+    """Load all templates (builtin + user-defined)."""
+    data = load_data()
+    user_templates = data.get("templates", {})
+    # Merge builtin and user templates (user templates can override builtin)
+    all_templates = {**BUILTIN_TEMPLATES}
+    for tid, template in user_templates.items():
+        template["builtin"] = False
+        all_templates[tid] = template
+    return all_templates
+
+def save_user_template(template_id: str, template: dict):
+    """Save a user-defined template."""
+    data = load_data()
+    if "templates" not in data:
+        data["templates"] = {}
+    template["builtin"] = False
+    data["templates"][template_id] = template
+    save_data(data)
+
+def delete_user_template(template_id: str) -> bool:
+    """Delete a user-defined template. Returns False if builtin."""
+    if template_id in BUILTIN_TEMPLATES:
+        return False
+    data = load_data()
+    if template_id in data.get("templates", {}):
+        del data["templates"][template_id]
+        save_data(data)
+        return True
+    return False
+
+# ============================================================================
+# History Functions
+# ============================================================================
+
+def load_history() -> list:
+    """Load launch history."""
+    data = load_data()
+    return data.get("history", [])
+
+def add_history_entry(workspace_name: str, working_dir: str):
+    """Add a launch to history."""
+    import uuid
+    data = load_data()
+    history = data.get("history", [])
+    settings = data.get("settings", {})
+    limit = settings.get("history_limit", 20)
+
+    entry = {
+        "id": str(uuid.uuid4())[:8],
+        "workspace_name": workspace_name,
+        "working_dir": working_dir,
+        "launched_at": datetime.now().isoformat()
+    }
+
+    # Add to beginning of list
+    history.insert(0, entry)
+
+    # Prune to limit
+    if len(history) > limit:
+        history = history[:limit]
+
+    data["history"] = history
+    save_data(data)
+
+def clear_history():
+    """Clear all history."""
+    data = load_data()
+    data["history"] = []
+    save_data(data)
 
 # ============================================================================
 # Command Generation
@@ -348,15 +576,18 @@ def launch_workspace(name):
     workspaces[name] = ws
     save_workspaces(workspaces)
 
+    # Get working directory
+    working_dir = os.path.expanduser(ws.get('working_dir', '')) or os.getcwd()
+
+    # Add to history
+    add_history_entry(name, working_dir)
+
     # Generate launch script
     script_content = build_launch_script(ws)
     ensure_config_dir()
     with open(LAUNCH_SCRIPT, 'w') as f:
         f.write(script_content)
     os.chmod(LAUNCH_SCRIPT, 0o755)
-
-    # Get working directory
-    working_dir = os.path.expanduser(ws.get('working_dir', '')) or os.getcwd()
 
     # Open IDE if configured
     ide = ws.get('ide', 'terminal')
@@ -377,6 +608,356 @@ def list_ides():
 def list_tools():
     """List built-in Claude Code tools."""
     return jsonify(BUILTIN_TOOLS)
+
+# ============================================================================
+# API Routes - Groups
+# ============================================================================
+
+@app.route('/api/groups', methods=['GET'])
+def api_list_groups():
+    """List all groups."""
+    return jsonify(load_groups())
+
+@app.route('/api/groups', methods=['POST'])
+def api_create_group():
+    """Create a new group."""
+    data = request.json
+    name = data.get('name', '').strip()
+
+    if not name:
+        return jsonify({"error": "Group name is required"}), 400
+
+    groups = load_groups()
+    if name in groups:
+        return jsonify({"error": "Group already exists"}), 400
+
+    groups[name] = {
+        "order": len(groups),
+        "color": data.get('color', get_next_group_color())
+    }
+    save_groups(groups)
+
+    return jsonify({"status": "ok", "group": groups[name]})
+
+@app.route('/api/groups/<name>', methods=['PUT'])
+def api_update_group(name):
+    """Update a group (rename, color, order)."""
+    data = request.json
+    groups = load_groups()
+
+    if name not in groups:
+        return jsonify({"error": "Group not found"}), 404
+
+    new_name = data.get('new_name', '').strip()
+    if new_name and new_name != name:
+        if new_name in groups:
+            return jsonify({"error": "Group with new name already exists"}), 400
+        # Rename group
+        groups[new_name] = groups.pop(name)
+        # Update workspaces that reference this group
+        workspaces = load_workspaces()
+        for ws in workspaces.values():
+            if ws.get('group') == name:
+                ws['group'] = new_name
+        save_workspaces(workspaces)
+        name = new_name
+
+    if 'color' in data:
+        groups[name]['color'] = data['color']
+    if 'order' in data:
+        groups[name]['order'] = data['order']
+
+    save_groups(groups)
+    return jsonify({"status": "ok"})
+
+@app.route('/api/groups/<name>', methods=['DELETE'])
+def api_delete_group(name):
+    """Delete a group (moves workspaces to ungrouped)."""
+    groups = load_groups()
+
+    if name not in groups:
+        return jsonify({"error": "Group not found"}), 404
+
+    # Remove group from workspaces
+    workspaces = load_workspaces()
+    for ws in workspaces.values():
+        if ws.get('group') == name:
+            ws['group'] = ""
+    save_workspaces(workspaces)
+
+    # Delete the group
+    del groups[name]
+    save_groups(groups)
+
+    return jsonify({"status": "ok"})
+
+@app.route('/api/workspaces/<name>/group', methods=['PUT'])
+def api_set_workspace_group(name):
+    """Assign a workspace to a group."""
+    data = request.json
+    group_name = data.get('group', '')
+
+    workspaces = load_workspaces()
+    if name not in workspaces:
+        return jsonify({"error": "Workspace not found"}), 404
+
+    workspaces[name]['group'] = group_name
+    save_workspaces(workspaces)
+
+    return jsonify({"status": "ok"})
+
+# ============================================================================
+# API Routes - Templates
+# ============================================================================
+
+@app.route('/api/templates', methods=['GET'])
+def api_list_templates():
+    """List all templates (builtin + user-defined)."""
+    return jsonify(load_templates())
+
+@app.route('/api/templates/<template_id>', methods=['GET'])
+def api_get_template(template_id):
+    """Get a single template."""
+    templates = load_templates()
+    if template_id in templates:
+        return jsonify(templates[template_id])
+    return jsonify({"error": "Template not found"}), 404
+
+@app.route('/api/templates', methods=['POST'])
+def api_create_template():
+    """Create a user template."""
+    data = request.json
+    template_id = data.get('id', '').strip().lower().replace(' ', '-')
+    name = data.get('name', '').strip()
+
+    if not template_id or not name:
+        return jsonify({"error": "Template ID and name are required"}), 400
+
+    if template_id in BUILTIN_TEMPLATES:
+        return jsonify({"error": "Cannot override builtin template"}), 400
+
+    template = {
+        "name": name,
+        "description": data.get('description', ''),
+        "icon": data.get('icon', 'folder'),
+        "config": data.get('config', {})
+    }
+
+    save_user_template(template_id, template)
+    return jsonify({"status": "ok", "template_id": template_id})
+
+@app.route('/api/templates/<template_id>', methods=['DELETE'])
+def api_delete_template(template_id):
+    """Delete a user template."""
+    if template_id in BUILTIN_TEMPLATES:
+        return jsonify({"error": "Cannot delete builtin template"}), 400
+
+    if delete_user_template(template_id):
+        return jsonify({"status": "ok"})
+    return jsonify({"error": "Template not found"}), 404
+
+@app.route('/api/workspaces/from-template', methods=['POST'])
+def api_create_from_template():
+    """Create a workspace from a template."""
+    data = request.json
+    template_id = data.get('template_id', '')
+    name = data.get('name', '').strip()
+    working_dir = data.get('working_dir', '')
+    overrides = data.get('overrides', {})
+
+    if not template_id or not name:
+        return jsonify({"error": "Template ID and workspace name are required"}), 400
+
+    templates = load_templates()
+    if template_id not in templates:
+        return jsonify({"error": "Template not found"}), 404
+
+    workspaces = load_workspaces()
+    if name in workspaces:
+        return jsonify({"error": "Workspace already exists"}), 400
+
+    template = templates[template_id]
+    config = template.get('config', {})
+
+    # Create workspace from template
+    workspace = {**DEFAULT_WORKSPACE, **config, **overrides}
+    workspace['name'] = name
+    workspace['working_dir'] = working_dir
+    workspace['template_source'] = template_id
+    workspace['created'] = datetime.now().isoformat()
+
+    workspaces[name] = workspace
+    save_workspaces(workspaces)
+
+    return jsonify({"status": "ok", "workspace": workspace})
+
+# ============================================================================
+# API Routes - History
+# ============================================================================
+
+@app.route('/api/history', methods=['GET'])
+def api_get_history():
+    """Get launch history."""
+    limit = request.args.get('limit', 20, type=int)
+    history = load_history()[:limit]
+
+    # Add 'exists' field to indicate if workspace still exists
+    workspaces = load_workspaces()
+    for entry in history:
+        entry['exists'] = entry['workspace_name'] in workspaces
+
+    return jsonify({"history": history})
+
+@app.route('/api/history', methods=['DELETE'])
+def api_clear_history():
+    """Clear all history."""
+    clear_history()
+    return jsonify({"status": "ok"})
+
+@app.route('/api/history/<entry_id>/relaunch', methods=['POST'])
+def api_relaunch_from_history(entry_id):
+    """Re-launch a workspace from history."""
+    history = load_history()
+    entry = next((h for h in history if h['id'] == entry_id), None)
+
+    if not entry:
+        return jsonify({"error": "History entry not found"}), 404
+
+    workspace_name = entry['workspace_name']
+    workspaces = load_workspaces()
+
+    if workspace_name not in workspaces:
+        return jsonify({"error": "Workspace no longer exists"}), 404
+
+    # Delegate to regular launch
+    return launch_workspace(workspace_name)
+
+# ============================================================================
+# API Routes - Import/Export
+# ============================================================================
+
+@app.route('/api/export/workspace/<name>', methods=['GET'])
+def api_export_workspace(name):
+    """Export a single workspace as JSON."""
+    workspaces = load_workspaces()
+    if name not in workspaces:
+        return jsonify({"error": "Workspace not found"}), 404
+
+    workspace = workspaces[name]
+    return jsonify({
+        "export_version": 1,
+        "export_date": datetime.now().isoformat(),
+        "workspaces": [workspace]
+    })
+
+@app.route('/api/export/all', methods=['GET'])
+def api_export_all():
+    """Export all workspaces as JSON."""
+    workspaces = load_workspaces()
+    groups = load_groups()
+
+    return jsonify({
+        "export_version": 1,
+        "export_date": datetime.now().isoformat(),
+        "workspaces": list(workspaces.values()),
+        "groups": groups
+    })
+
+@app.route('/api/import/workspace', methods=['POST'])
+def api_import_workspaces():
+    """Import workspace(s) from JSON."""
+    data = request.json
+    import_workspaces = data.get('workspaces', [])
+    conflict_resolution = data.get('conflict_resolution', 'skip')  # skip, rename, overwrite
+    import_groups = data.get('groups', {})
+
+    if not import_workspaces:
+        return jsonify({"error": "No workspaces to import"}), 400
+
+    workspaces = load_workspaces()
+    groups = load_groups()
+
+    imported = []
+    skipped = []
+    renamed = {}
+
+    for ws in import_workspaces:
+        name = ws.get('name', '')
+        if not name:
+            continue
+
+        if name in workspaces:
+            if conflict_resolution == 'skip':
+                skipped.append(name)
+                continue
+            elif conflict_resolution == 'rename':
+                # Find unique name
+                new_name = name
+                counter = 1
+                while new_name in workspaces:
+                    new_name = f"{name}-{counter}"
+                    counter += 1
+                renamed[name] = new_name
+                ws['name'] = new_name
+                name = new_name
+            # overwrite: just proceed
+
+        # Merge with defaults and save
+        workspace = {**DEFAULT_WORKSPACE, **ws}
+        workspace['created'] = workspace.get('created') or datetime.now().isoformat()
+        workspaces[name] = workspace
+        imported.append(name)
+
+    # Import groups
+    for group_name, group_data in import_groups.items():
+        if group_name not in groups:
+            groups[group_name] = group_data
+
+    save_workspaces(workspaces)
+    save_groups(groups)
+
+    return jsonify({
+        "status": "ok",
+        "imported": imported,
+        "skipped": skipped,
+        "renamed": renamed
+    })
+
+@app.route('/api/export/template/<template_id>', methods=['GET'])
+def api_export_template(template_id):
+    """Export a template as JSON."""
+    templates = load_templates()
+    if template_id not in templates:
+        return jsonify({"error": "Template not found"}), 404
+
+    template = templates[template_id]
+    return jsonify({
+        "export_version": 1,
+        "export_date": datetime.now().isoformat(),
+        "template_id": template_id,
+        "template": template
+    })
+
+@app.route('/api/import/template', methods=['POST'])
+def api_import_template():
+    """Import a template from JSON."""
+    data = request.json
+    template_id = data.get('template_id', '')
+    template = data.get('template', {})
+
+    if not template_id or not template:
+        return jsonify({"error": "Template ID and template data required"}), 400
+
+    if template_id in BUILTIN_TEMPLATES:
+        return jsonify({"error": "Cannot override builtin template"}), 400
+
+    save_user_template(template_id, template)
+    return jsonify({"status": "ok"})
+
+@app.route('/api/colors', methods=['GET'])
+def api_get_colors():
+    """Get available group colors."""
+    return jsonify(GROUP_COLORS)
 
 # ============================================================================
 # Frontend HTML/CSS/JS
@@ -844,6 +1425,399 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             color: var(--text-dim);
             margin-top: 4px;
         }
+
+        /* New Workspace Buttons */
+        .sidebar-buttons {
+            display: flex;
+            gap: 8px;
+            margin: 16px 20px;
+        }
+
+        .sidebar-buttons .btn-new {
+            margin: 0;
+            flex: 1;
+        }
+
+        .btn-template {
+            padding: 12px;
+            background: var(--surface-2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-template:hover {
+            background: var(--border);
+        }
+
+        /* Sidebar Sections */
+        .sidebar-section {
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-section-header {
+            padding: 12px 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .sidebar-section-header:hover {
+            background: var(--surface-2);
+        }
+
+        .sidebar-section-header .chevron {
+            transition: transform 0.2s;
+        }
+
+        .sidebar-section-header.collapsed .chevron {
+            transform: rotate(-90deg);
+        }
+
+        .sidebar-section-content {
+            max-height: 500px;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .sidebar-section-content.collapsed {
+            max-height: 0;
+        }
+
+        /* Recent History Items */
+        .history-item {
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .history-item:hover {
+            background: var(--surface-2);
+        }
+
+        .history-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .history-item-name {
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .history-item-time {
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .history-item-actions {
+            display: flex;
+            gap: 4px;
+        }
+
+        .btn-icon {
+            padding: 6px;
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-icon:hover {
+            background: var(--surface-2);
+            color: var(--text);
+        }
+
+        .btn-icon.play:hover {
+            color: var(--green);
+        }
+
+        /* Group Styling */
+        .group-header {
+            padding: 8px 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .group-header:hover {
+            background: var(--surface-2);
+        }
+
+        .group-color-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .group-count {
+            font-size: 10px;
+            padding: 1px 5px;
+            background: var(--surface);
+            border-radius: 10px;
+            margin-left: auto;
+        }
+
+        .group-workspaces {
+            max-height: 500px;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .group-workspaces.collapsed {
+            max-height: 0;
+        }
+
+        /* Sidebar Footer */
+        .sidebar-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 8px;
+        }
+
+        .sidebar-footer .btn {
+            flex: 1;
+            font-size: 12px;
+            padding: 8px 12px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transform: scale(0.9);
+            transition: transform 0.2s;
+        }
+
+        .modal-overlay.active .modal {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .modal-close:hover {
+            color: var(--text);
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .modal-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        /* Template Grid */
+        .template-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .template-card {
+            padding: 16px;
+            background: var(--bg);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .template-card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .template-card.selected {
+            border-color: var(--accent);
+            background: rgba(210, 168, 255, 0.05);
+        }
+
+        .template-card-icon {
+            width: 32px;
+            height: 32px;
+            margin-bottom: 12px;
+            color: var(--accent);
+        }
+
+        .template-card-name {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .template-card-desc {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .template-card-badge {
+            display: inline-block;
+            font-size: 10px;
+            padding: 2px 6px;
+            background: var(--surface-2);
+            border-radius: 4px;
+            color: var(--text-dim);
+            margin-top: 8px;
+        }
+
+        /* Import/Export */
+        .import-dropzone {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .import-dropzone:hover {
+            border-color: var(--accent-dim);
+            background: rgba(210, 168, 255, 0.05);
+        }
+
+        .import-dropzone.dragover {
+            border-color: var(--accent);
+            background: rgba(210, 168, 255, 0.1);
+        }
+
+        .import-preview {
+            margin-top: 16px;
+        }
+
+        .import-preview-item {
+            padding: 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .conflict-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: var(--orange);
+            color: white;
+        }
+
+        /* Color Picker */
+        .color-picker {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .color-option {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.15s;
+        }
+
+        .color-option:hover {
+            transform: scale(1.1);
+        }
+
+        .color-option.selected {
+            border-color: white;
+            box-shadow: 0 0 0 2px var(--accent);
+        }
+
+        /* Template Badge in Form */
+        .template-source-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            padding: 4px 8px;
+            background: var(--surface-2);
+            border-radius: 4px;
+            color: var(--text-dim);
+            margin-left: 12px;
+        }
     </style>
 </head>
 <body>
@@ -860,17 +1834,58 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 </div>
             </div>
 
-            <button class="btn-new" onclick="createNewWorkspace()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 5v14M5 12h14"/>
-                </svg>
-                New Workspace
-            </button>
+            <div class="sidebar-buttons">
+                <button class="btn-new" onclick="createNewWorkspace()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12h14"/>
+                    </svg>
+                    New
+                </button>
+                <button class="btn-template" onclick="showTemplateModal()" title="New from Template">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <path d="M3 9h18M9 21V9"/>
+                    </svg>
+                </button>
+            </div>
 
-            <div class="workspace-list-header">Workspaces</div>
-            <ul class="workspace-list" id="workspace-list">
+            <!-- Recent Section -->
+            <div class="sidebar-section" id="recent-section">
+                <div class="sidebar-section-header" onclick="toggleSection('recent')">
+                    <span>Recent</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M6 9l6 6 6-6"/>
+                    </svg>
+                </div>
+                <div class="sidebar-section-content" id="recent-content">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Workspaces Section (Grouped) -->
+            <div class="workspace-list" id="workspace-list">
                 <!-- Populated by JS -->
-            </ul>
+            </div>
+
+            <!-- Sidebar Footer -->
+            <div class="sidebar-footer">
+                <button class="btn btn-secondary" onclick="showImportModal()">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    Import
+                </button>
+                <button class="btn btn-secondary" onclick="exportAll()">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Export
+                </button>
+            </div>
         </aside>
 
         <!-- Main Content -->
@@ -891,28 +1906,198 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- Template Modal -->
+    <div class="modal-overlay" id="template-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>New from Template</h2>
+                <button class="modal-close" onclick="closeModal('template-modal')">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Select Template</label>
+                    <div class="template-grid" id="template-grid">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top: 20px;">
+                    <label for="template-ws-name">Workspace Name *</label>
+                    <input type="text" id="template-ws-name" placeholder="my-new-project">
+                </div>
+                <div class="form-group">
+                    <label for="template-ws-dir">Working Directory</label>
+                    <input type="text" id="template-ws-dir" placeholder="~/projects/my-new-project">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('template-modal')">Cancel</button>
+                <button class="btn btn-primary" onclick="createFromTemplate()">Create Workspace</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div class="modal-overlay" id="import-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Import Workspaces</h2>
+                <button class="modal-close" onclick="closeModal('import-modal')">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="import-dropzone" id="import-dropzone" onclick="document.getElementById('import-file').click()">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 12px; opacity: 0.5;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <p>Drop JSON file here or click to browse</p>
+                    <input type="file" id="import-file" accept=".json" style="display: none;" onchange="handleImportFile(event)">
+                </div>
+                <div class="import-preview" id="import-preview" style="display: none;">
+                    <h4 style="margin-bottom: 12px;">Workspaces to Import:</h4>
+                    <div id="import-preview-list"></div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label>If workspace exists:</label>
+                        <select id="conflict-resolution">
+                            <option value="skip">Skip (keep existing)</option>
+                            <option value="rename">Rename (add suffix)</option>
+                            <option value="overwrite">Overwrite (replace existing)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('import-modal')">Cancel</button>
+                <button class="btn btn-primary" id="import-btn" onclick="performImport()" disabled>Import</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Group Management Modal -->
+    <div class="modal-overlay" id="group-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="group-modal-title">New Group</h2>
+                <button class="modal-close" onclick="closeModal('group-modal')">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="group-name">Group Name</label>
+                    <input type="text" id="group-name" placeholder="Development">
+                </div>
+                <div class="form-group">
+                    <label>Color</label>
+                    <div class="color-picker" id="color-picker">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-danger" id="delete-group-btn" onclick="deleteGroup()" style="margin-right: auto; display: none;">Delete Group</button>
+                <button class="btn btn-secondary" onclick="closeModal('group-modal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveGroup()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save as Template Modal -->
+    <div class="modal-overlay" id="save-template-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Save as Template</h2>
+                <button class="modal-close" onclick="closeModal('save-template-modal')">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="save-template-name">Template Name *</label>
+                    <input type="text" id="save-template-name" placeholder="My Custom Template">
+                </div>
+                <div class="form-group">
+                    <label for="save-template-desc">Description</label>
+                    <input type="text" id="save-template-desc" placeholder="A brief description">
+                </div>
+                <p class="hint" style="margin-top: 12px;">The current workspace settings (except name and directory) will be saved as a reusable template.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('save-template-modal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveAsTemplate()">Save Template</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // State
         let workspaces = {};
+        let groups = {};
+        let templates = {};
+        let history = [];
+        let colors = [];
         let currentWorkspace = null;
         let availableTools = [];
         let availableIdes = {};
+        let selectedTemplate = null;
+        let importData = null;
+        let editingGroup = null;
+        let selectedGroupColor = null;
 
         // Initialize
         async function init() {
             await Promise.all([
                 loadWorkspaces(),
+                loadGroups(),
+                loadTemplates(),
+                loadHistory(),
+                loadColors(),
                 loadTools(),
                 loadIdes()
             ]);
+            renderRecentHistory();
             renderWorkspaceList();
             showEmptyState();
+            setupDragDrop();
         }
 
         // API Functions
         async function loadWorkspaces() {
             const res = await fetch('/api/workspaces');
             workspaces = await res.json();
+        }
+
+        async function loadGroups() {
+            const res = await fetch('/api/groups');
+            groups = await res.json();
+        }
+
+        async function loadTemplates() {
+            const res = await fetch('/api/templates');
+            templates = await res.json();
+        }
+
+        async function loadHistory() {
+            const res = await fetch('/api/history?limit=5');
+            const data = await res.json();
+            history = data.history || [];
+        }
+
+        async function loadColors() {
+            const res = await fetch('/api/colors');
+            colors = await res.json();
         }
 
         async function loadTools() {
@@ -925,26 +2110,143 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             availableIdes = await res.json();
         }
 
+        // Time formatting
+        function timeAgo(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const seconds = Math.floor((now - date) / 1000);
+
+            if (seconds < 60) return 'just now';
+            if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+            if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+            if (seconds < 604800) return Math.floor(seconds / 86400) + 'd ago';
+            return date.toLocaleDateString();
+        }
+
         // Render Functions
+        function renderRecentHistory() {
+            const content = document.getElementById('recent-content');
+
+            if (history.length === 0) {
+                content.innerHTML = '<div style="padding: 12px 20px; color: var(--text-dim); font-size: 12px;">No recent launches</div>';
+                return;
+            }
+
+            content.innerHTML = history.map(h => `
+                <div class="history-item" onclick="selectWorkspace('${h.workspace_name}')">
+                    <div class="history-item-info">
+                        <div class="history-item-name">${h.workspace_name}</div>
+                        <div class="history-item-time">${timeAgo(h.launched_at)}</div>
+                    </div>
+                    <div class="history-item-actions">
+                        <button class="btn-icon play" onclick="event.stopPropagation(); quickLaunch('${h.workspace_name}')" title="Launch">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                <polygon points="5 3 19 12 5 21 5 3"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
         function renderWorkspaceList() {
             const list = document.getElementById('workspace-list');
             const names = Object.keys(workspaces).sort();
 
             if (names.length === 0) {
-                list.innerHTML = '<li style="padding: 20px; color: var(--text-dim); font-size: 13px;">No workspaces yet</li>';
+                list.innerHTML = '<div style="padding: 20px; color: var(--text-dim); font-size: 13px;">No workspaces yet</div>';
                 return;
             }
 
-            list.innerHTML = names.map(name => {
+            // Group workspaces
+            const grouped = {};
+            const ungrouped = [];
+
+            names.forEach(name => {
                 const ws = workspaces[name];
-                const isActive = currentWorkspace && currentWorkspace.name === name;
-                return `
-                    <li class="workspace-item ${isActive ? 'active' : ''}" onclick="selectWorkspace('${name}')">
-                        <span class="workspace-item-name">${name}</span>
-                        ${ws.model ? `<span class="workspace-item-badge">${ws.model}</span>` : ''}
-                    </li>
+                const groupName = ws.group || '';
+                if (groupName && groups[groupName]) {
+                    if (!grouped[groupName]) grouped[groupName] = [];
+                    grouped[groupName].push(name);
+                } else {
+                    ungrouped.push(name);
+                }
+            });
+
+            let html = '';
+
+            // Render groups
+            const sortedGroups = Object.keys(groups).sort((a, b) => (groups[a].order || 0) - (groups[b].order || 0));
+
+            sortedGroups.forEach(groupName => {
+                const groupWs = grouped[groupName] || [];
+                const group = groups[groupName];
+                html += `
+                    <div class="group-header" onclick="toggleGroup('${groupName}')" oncontextmenu="event.preventDefault(); showGroupModal('${groupName}')">
+                        <span class="group-color-dot" style="background: ${group.color || '#58a6ff'}"></span>
+                        <span>${groupName}</span>
+                        <span class="group-count">${groupWs.length}</span>
+                        <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                    </div>
+                    <div class="group-workspaces" id="group-${groupName.replace(/\\s+/g, '-')}">
+                        ${groupWs.map(name => renderWorkspaceItem(name)).join('')}
+                    </div>
                 `;
-            }).join('');
+            });
+
+            // Render ungrouped
+            if (ungrouped.length > 0) {
+                html += `
+                    <div class="group-header" onclick="toggleGroup('ungrouped')">
+                        <span class="group-color-dot" style="background: var(--text-dim)"></span>
+                        <span>Ungrouped</span>
+                        <span class="group-count">${ungrouped.length}</span>
+                        <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                    </div>
+                    <div class="group-workspaces" id="group-ungrouped">
+                        ${ungrouped.map(name => renderWorkspaceItem(name)).join('')}
+                    </div>
+                `;
+            }
+
+            // Add "New Group" button
+            html += `
+                <div class="group-header" onclick="showGroupModal()" style="color: var(--accent-dim);">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12h14"/>
+                    </svg>
+                    <span>New Group</span>
+                </div>
+            `;
+
+            list.innerHTML = html;
+        }
+
+        function renderWorkspaceItem(name) {
+            const ws = workspaces[name];
+            const isActive = currentWorkspace && currentWorkspace.name === name;
+            return `
+                <div class="workspace-item ${isActive ? 'active' : ''}" onclick="selectWorkspace('${name}')">
+                    <span class="workspace-item-name">${name}</span>
+                    ${ws.model ? `<span class="workspace-item-badge">${ws.model}</span>` : ''}
+                </div>
+            `;
+        }
+
+        function toggleGroup(groupName) {
+            const el = document.getElementById('group-' + groupName.replace(/\\s+/g, '-'));
+            if (el) el.classList.toggle('collapsed');
+        }
+
+        function toggleSection(section) {
+            const header = document.querySelector(`#${section}-section .sidebar-section-header`);
+            const content = document.getElementById(`${section}-content`);
+            header.classList.toggle('collapsed');
+            content.classList.toggle('collapsed');
         }
 
         function showEmptyState() {
@@ -992,10 +2294,18 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             const envVarsText = Object.entries(ws.env_vars || {})
                 .map(([k, v]) => `${k}=${v}`).join('\\n');
 
+            // Group options
+            const groupOptions = ['<option value="">No Group</option>']
+                .concat(Object.keys(groups).sort().map(g =>
+                    `<option value="${g}" ${ws.group === g ? 'selected' : ''}>${g}</option>`
+                )).join('');
+
             document.getElementById('main-content').innerHTML = `
                 <div class="main-header">
-                    <h1>${ws.name || 'New Workspace'}</h1>
+                    <h1>${ws.name || 'New Workspace'}${ws.template_source ? `<span class="template-source-badge">from ${templates[ws.template_source]?.name || ws.template_source}</span>` : ''}</h1>
                     <div class="header-actions">
+                        ${ws.name ? `<button class="btn btn-secondary" onclick="exportWorkspace('${ws.name}')">Export</button>` : ''}
+                        ${ws.name ? `<button class="btn btn-secondary" onclick="showSaveTemplateModal()">Save as Template</button>` : ''}
                         ${ws.name ? `<button class="btn btn-danger" onclick="deleteWorkspace()">Delete</button>` : ''}
                         <button class="btn btn-secondary" onclick="cancelEdit()">Cancel</button>
                         <button class="btn btn-primary" onclick="saveWorkspace()">Save</button>
@@ -1022,6 +2332,12 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                                 <label for="description">Description</label>
                                 <input type="text" id="description" name="description" value="${ws.description || ''}"
                                        placeholder="A brief description of this workspace">
+                            </div>
+                            <div class="form-group">
+                                <label for="group">Group</label>
+                                <select id="group" name="group">
+                                    ${groupOptions}
+                                </select>
                             </div>
                         </div>
 
@@ -1325,7 +2641,9 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 claude_md_content: '',
                 created: '',
                 last_used: '',
-                use_count: 0
+                use_count: 0,
+                group: '',
+                template_source: ''
             };
         }
 
@@ -1352,6 +2670,11 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             data.open_folder_in_ide = form.open_folder_in_ide.checked;
             data.init_claude_md = form.init_claude_md.checked;
             data.claude_md_content = form.claude_md_content.value;
+
+            // Group
+            if (form.group) {
+                data.group = form.group.value;
+            }
 
             // Additional directories
             data.additional_dirs = form.additional_dirs.value
@@ -1480,6 +2803,422 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             document.body.appendChild(toast);
 
             setTimeout(() => toast.remove(), 3000);
+        }
+
+        // Quick launch from history
+        async function quickLaunch(name) {
+            if (!workspaces[name]) {
+                showToast('Workspace not found', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/workspaces/${encodeURIComponent(name)}/launch`, {
+                    method: 'POST'
+                });
+
+                if (res.ok) {
+                    showToast('Launching ' + name + '...', 'success');
+                    await loadHistory();
+                    renderRecentHistory();
+                } else {
+                    showToast('Failed to launch', 'error');
+                }
+            } catch (e) {
+                showToast('Failed to launch', 'error');
+            }
+        }
+
+        // Modal functions
+        function openModal(id) {
+            document.getElementById(id).classList.add('active');
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        // Template Modal
+        function showTemplateModal() {
+            selectedTemplate = null;
+            document.getElementById('template-ws-name').value = '';
+            document.getElementById('template-ws-dir').value = '';
+
+            const grid = document.getElementById('template-grid');
+            grid.innerHTML = Object.entries(templates).map(([id, t]) => `
+                <div class="template-card" onclick="selectTemplate('${id}')" id="template-${id}">
+                    <svg class="template-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        ${getTemplateIcon(t.icon)}
+                    </svg>
+                    <div class="template-card-name">${t.name}</div>
+                    <div class="template-card-desc">${t.description || ''}</div>
+                    ${t.builtin ? '<span class="template-card-badge">Built-in</span>' : '<span class="template-card-badge">Custom</span>'}
+                </div>
+            `).join('');
+
+            openModal('template-modal');
+        }
+
+        function getTemplateIcon(icon) {
+            const icons = {
+                python: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+                nodejs: '<circle cx="12" cy="12" r="10"/><path d="M8 12l4 4 4-4"/>',
+                react: '<circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/>',
+                rust: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/>',
+                folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'
+            };
+            return icons[icon] || icons.folder;
+        }
+
+        function selectTemplate(id) {
+            selectedTemplate = id;
+            document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
+            document.getElementById('template-' + id).classList.add('selected');
+        }
+
+        async function createFromTemplate() {
+            if (!selectedTemplate) {
+                showToast('Please select a template', 'error');
+                return;
+            }
+
+            const name = document.getElementById('template-ws-name').value.trim();
+            const workingDir = document.getElementById('template-ws-dir').value.trim();
+
+            if (!name) {
+                showToast('Workspace name is required', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/workspaces/from-template', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        template_id: selectedTemplate,
+                        name: name,
+                        working_dir: workingDir
+                    })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    await loadWorkspaces();
+                    renderWorkspaceList();
+                    selectWorkspace(name);
+                    closeModal('template-modal');
+                    showToast('Workspace created from template', 'success');
+                } else {
+                    const err = await res.json();
+                    showToast(err.error || 'Failed to create workspace', 'error');
+                }
+            } catch (e) {
+                showToast('Failed to create workspace', 'error');
+            }
+        }
+
+        // Save as Template Modal
+        function showSaveTemplateModal() {
+            if (!currentWorkspace || !currentWorkspace.name) {
+                showToast('No workspace selected', 'error');
+                return;
+            }
+            document.getElementById('save-template-name').value = '';
+            document.getElementById('save-template-desc').value = '';
+            openModal('save-template-modal');
+        }
+
+        async function saveAsTemplate() {
+            const name = document.getElementById('save-template-name').value.trim();
+            const desc = document.getElementById('save-template-desc').value.trim();
+
+            if (!name) {
+                showToast('Template name is required', 'error');
+                return;
+            }
+
+            const templateId = name.toLowerCase().replace(/\\s+/g, '-');
+            const config = { ...currentWorkspace };
+            delete config.name;
+            delete config.working_dir;
+            delete config.created;
+            delete config.last_used;
+            delete config.use_count;
+            delete config.group;
+            delete config.template_source;
+
+            try {
+                const res = await fetch('/api/templates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: templateId,
+                        name: name,
+                        description: desc,
+                        config: config
+                    })
+                });
+
+                if (res.ok) {
+                    await loadTemplates();
+                    closeModal('save-template-modal');
+                    showToast('Template saved', 'success');
+                } else {
+                    const err = await res.json();
+                    showToast(err.error || 'Failed to save template', 'error');
+                }
+            } catch (e) {
+                showToast('Failed to save template', 'error');
+            }
+        }
+
+        // Group Modal
+        function showGroupModal(groupName = null) {
+            editingGroup = groupName;
+            document.getElementById('group-modal-title').textContent = groupName ? 'Edit Group' : 'New Group';
+            document.getElementById('group-name').value = groupName || '';
+            document.getElementById('delete-group-btn').style.display = groupName ? 'block' : 'none';
+
+            // Render color picker
+            const existingColor = groupName && groups[groupName] ? groups[groupName].color : null;
+            selectedGroupColor = existingColor || colors[0];
+
+            document.getElementById('color-picker').innerHTML = colors.map(c => `
+                <div class="color-option ${c === selectedGroupColor ? 'selected' : ''}"
+                     style="background: ${c}"
+                     onclick="selectGroupColor('${c}')"></div>
+            `).join('');
+
+            openModal('group-modal');
+        }
+
+        function selectGroupColor(color) {
+            selectedGroupColor = color;
+            document.querySelectorAll('.color-option').forEach(el => {
+                el.classList.toggle('selected', el.style.background === color);
+            });
+        }
+
+        async function saveGroup() {
+            const name = document.getElementById('group-name').value.trim();
+
+            if (!name) {
+                showToast('Group name is required', 'error');
+                return;
+            }
+
+            try {
+                if (editingGroup) {
+                    // Update existing group
+                    const res = await fetch(`/api/groups/${encodeURIComponent(editingGroup)}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            new_name: name !== editingGroup ? name : undefined,
+                            color: selectedGroupColor
+                        })
+                    });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        showToast(err.error || 'Failed to update group', 'error');
+                        return;
+                    }
+                } else {
+                    // Create new group
+                    const res = await fetch('/api/groups', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name: name,
+                            color: selectedGroupColor
+                        })
+                    });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        showToast(err.error || 'Failed to create group', 'error');
+                        return;
+                    }
+                }
+
+                await loadGroups();
+                await loadWorkspaces();
+                renderWorkspaceList();
+                closeModal('group-modal');
+                showToast(editingGroup ? 'Group updated' : 'Group created', 'success');
+            } catch (e) {
+                showToast('Failed to save group', 'error');
+            }
+        }
+
+        async function deleteGroup() {
+            if (!editingGroup) return;
+
+            if (!confirm(`Delete group "${editingGroup}"? Workspaces will be moved to ungrouped.`)) return;
+
+            try {
+                await fetch(`/api/groups/${encodeURIComponent(editingGroup)}`, {
+                    method: 'DELETE'
+                });
+
+                await loadGroups();
+                await loadWorkspaces();
+                renderWorkspaceList();
+                closeModal('group-modal');
+                showToast('Group deleted', 'success');
+            } catch (e) {
+                showToast('Failed to delete group', 'error');
+            }
+        }
+
+        // Import Modal
+        function showImportModal() {
+            importData = null;
+            document.getElementById('import-preview').style.display = 'none';
+            document.getElementById('import-dropzone').style.display = 'block';
+            document.getElementById('import-btn').disabled = true;
+            document.getElementById('import-file').value = '';
+            openModal('import-modal');
+        }
+
+        function handleImportFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    importData = JSON.parse(e.target.result);
+
+                    // Show preview
+                    const previewList = document.getElementById('import-preview-list');
+                    const wsToImport = importData.workspaces || [];
+
+                    previewList.innerHTML = wsToImport.map(ws => {
+                        const exists = workspaces[ws.name];
+                        return `
+                            <div class="import-preview-item">
+                                <span>${ws.name}</span>
+                                ${exists ? '<span class="conflict-badge">Exists</span>' : ''}
+                            </div>
+                        `;
+                    }).join('');
+
+                    document.getElementById('import-dropzone').style.display = 'none';
+                    document.getElementById('import-preview').style.display = 'block';
+                    document.getElementById('import-btn').disabled = false;
+                } catch (err) {
+                    showToast('Invalid JSON file', 'error');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        async function performImport() {
+            if (!importData) return;
+
+            const resolution = document.getElementById('conflict-resolution').value;
+
+            try {
+                const res = await fetch('/api/import/workspace', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        workspaces: importData.workspaces || [],
+                        groups: importData.groups || {},
+                        conflict_resolution: resolution
+                    })
+                });
+
+                if (res.ok) {
+                    const result = await res.json();
+                    await loadWorkspaces();
+                    await loadGroups();
+                    renderWorkspaceList();
+                    closeModal('import-modal');
+
+                    const msg = `Imported ${result.imported.length} workspace(s)` +
+                        (result.skipped.length ? `, skipped ${result.skipped.length}` : '') +
+                        (Object.keys(result.renamed).length ? `, renamed ${Object.keys(result.renamed).length}` : '');
+                    showToast(msg, 'success');
+                } else {
+                    const err = await res.json();
+                    showToast(err.error || 'Import failed', 'error');
+                }
+            } catch (e) {
+                showToast('Import failed', 'error');
+            }
+        }
+
+        // Export functions
+        async function exportAll() {
+            try {
+                const res = await fetch('/api/export/all');
+                const data = await res.json();
+
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'claude-workspaces-export.json';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                showToast('Exported all workspaces', 'success');
+            } catch (e) {
+                showToast('Export failed', 'error');
+            }
+        }
+
+        async function exportWorkspace(name) {
+            try {
+                const res = await fetch(`/api/export/workspace/${encodeURIComponent(name)}`);
+                const data = await res.json();
+
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `workspace-${name}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+
+                showToast('Workspace exported', 'success');
+            } catch (e) {
+                showToast('Export failed', 'error');
+            }
+        }
+
+        // Drag and drop setup
+        function setupDragDrop() {
+            const dropzone = document.getElementById('import-dropzone');
+            if (!dropzone) return;
+
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropzone.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropzone.addEventListener(eventName, () => dropzone.classList.add('dragover'), false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropzone.addEventListener(eventName, () => dropzone.classList.remove('dragover'), false);
+            });
+
+            dropzone.addEventListener('drop', (e) => {
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    document.getElementById('import-file').files = e.dataTransfer.files;
+                    handleImportFile({ target: { files: [file] } });
+                }
+            }, false);
         }
 
         // Initialize on load
